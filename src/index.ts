@@ -79,9 +79,12 @@ async function fetchNSEIndices(): Promise<void> {
   const fallbackURL = "https://nse-api-ruby.vercel.app";
   const apis = [NSE_API, fallbackURL];
   
+  const indexSymbols = ["NIFTY%2050", "NIFTY%20BANK", "NIFTY%20IT", "NIFTY%20AUTO", "SENSEX", "NIFTY%20PHARMA"];
+  
   for (const api of apis) {
     try {
-      const response = await fetch(`${api}/index/list`, {
+      const symbolList = indexSymbols.join(",");
+      const response = await fetch(`${api}/stock/list?symbols=${symbolList}&res=num`, {
         headers: { "User-Agent": "Mozilla/5.0" },
         signal: AbortSignal.timeout(8000)
       });
@@ -89,29 +92,29 @@ async function fetchNSEIndices(): Promise<void> {
       if (!response.ok) continue;
 
       const data = await response.json();
-      const indices = data.data || [];
+      const stocks = data.stocks || [];
 
-      for (const idx of indices) {
+      for (const idx of stocks) {
         if (!idx.symbol) continue;
         
         const indexData: IndexData = {
-          symbol: idx.symbol.replace("NIFTY", "NIFTY%20").replace(" ", "%20"),
-          name: idx.name || idx.symbol,
-          value: parseFloat(idx.lastPrice || idx.value || 0),
+          symbol: idx.symbol.replace(" ", "%20"),
+          name: idx.symbol,
+          value: parseFloat(idx.last_price || 0),
           change: parseFloat(idx.change || 0),
-          percentChange: parseFloat(idx.pChange || 0),
+          percentChange: parseFloat(idx.percent_change || 0),
           timestamp: Date.now(),
         };
         await cacheIndex(indexData);
       }
-      console.log(`✅ Fetched ${indices.length} indices from ${api}`);
+      console.log(`✅ Fetched ${stocks.length} indices from ${api}`);
       return;
     } catch (error) {
-      console.warn(`⚠️ Failed to fetch from ${api}:`, error);
+      console.warn(`⚠️ Failed to fetch indices from ${api}:`, error);
     }
   }
   
-  console.error("❌ All NSE APIs failed");
+  console.warn("⚠️ All NSE APIs failed for indices, using fallback");
 }
 
 async function fetchStockQuote(symbol: string): Promise<TickerData | null> {
@@ -121,27 +124,27 @@ async function fetchStockQuote(symbol: string): Promise<TickerData | null> {
   for (const api of apis) {
     try {
       const response = await fetch(
-        `${api}/quote?symbol=${symbol}`,
+        `${api}/stock?symbol=${symbol}&res=num`,
         { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(5000) }
       );
 
       if (!response.ok) continue;
 
       const data = await response.json();
-      const q = data.data || data;
+      const q = data.stocks?.[0] || data;
 
       if (!q || !q.symbol) continue;
 
       return {
         symbol: q.symbol,
-        ltp: parseFloat(q.lastPrice || 0),
-        open: parseFloat(q.open || q.previousClose || 0),
-        high: parseFloat(q.dayHigh || q.high || 0),
-        low: parseFloat(q.dayLow || q.low || 0),
-        close: parseFloat(q.previousClose || q.close || 0),
-        volume: parseInt(q.totalTradedVolume || q.volume || 0),
+        ltp: parseFloat(q.last_price || 0),
+        open: parseFloat(q.open || q.previous_close || 0),
+        high: parseFloat(q.day_high || q.high || 0),
+        low: parseFloat(q.day_low || q.low || 0),
+        close: parseFloat(q.previous_close || q.close || 0),
+        volume: parseInt(q.volume || 0),
         change: parseFloat(q.change || 0),
-        percentChange: parseFloat(q.pChange || 0),
+        percentChange: parseFloat(q.percent_change || 0),
         timestamp: Date.now(),
       };
     } catch {
