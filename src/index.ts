@@ -60,7 +60,8 @@ async function cacheTicker(data: TickerData): Promise<void> {
     await redis.setex(key, 10, JSON.stringify(data));
     await redis.publish("ticker:updates", JSON.stringify(data));
   } catch (e) {
-    console.warn("Cache ticker error:", e);
+    console.warn("Cache ticker error:", e?.message || e);
+    redisAvailable = false;
   }
 }
 
@@ -71,7 +72,8 @@ async function cacheIndex(data: IndexData): Promise<void> {
     await redis.setex(key, 10, JSON.stringify(data));
     await redis.publish("index:updates", JSON.stringify(data));
   } catch (e) {
-    console.warn("Cache index error:", e);
+    console.warn("Cache index error:", e?.message || e);
+    redisAvailable = false;
   }
 }
 
