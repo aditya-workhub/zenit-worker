@@ -15,15 +15,16 @@ let redisAvailable = false;
 
 if (REDIS_URL) {
   redis = new Redis(REDIS_URL, {
-    maxRetriesPerRequest: 3,
+    maxRetriesPerRequest: 5,
     retryStrategy(times) {
-      if (times > 3) return null;
+      if (times > 5) return null;
       return Math.min(times * 200, 2000);
     },
     reconnectOnError() {
       return true;
     },
-    lazyConnect: true,
+    enableReadyCheck: false,
+    connectTimeout: 10000,
   });
 }
 
@@ -203,7 +204,6 @@ async function main(): Promise<void> {
   if (redis) {
     redis.on("error", (err) => {
       console.warn("⚠️ Redis error:", err.message);
-      redisAvailable = false;
     });
 
     redis.on("connect", () => {
@@ -211,13 +211,21 @@ async function main(): Promise<void> {
       redisAvailable = true;
     });
 
+    redis.on("ready", () => {
+      redisAvailable = true;
+    });
+
+    redis.on("close", () => {
+      console.warn("⚠️ Redis connection closed");
+      redisAvailable = false;
+    });
+
     try {
-      await redis.connect();
       await redis.ping();
       redisAvailable = true;
       console.log("✅ Redis ping OK");
     } catch (error) {
-      console.warn("⚠️ Redis not available, running without cache");
+      console.warn("⚠️ Redis not available, will retry in background");
       redisAvailable = false;
     }
   } else {
