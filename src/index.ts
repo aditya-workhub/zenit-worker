@@ -1,7 +1,7 @@
 import Redis from "ioredis";
 
 const REDIS_URL = process.env.REDIS_URL || "";
-const NSE_API = "https://nse-api-ruby.vercel.app";
+const NSE_API = process.env.NSE_API || "https://nse-api-ruby.vercel.app";
 
 const INDICES = ["NIFTY 50", "NIFTY BANK", "NIFTY IT", "NIFTY AUTO", "SENSEX", "NIFTY PHARMA"];
 const WATCHED_SYMBOLS = [
@@ -10,21 +10,22 @@ const WATCHED_SYMBOLS = [
   "ITC", "LT", "SUNPHARMA", "MARUTI"
 ];
 
-if (!REDIS_URL) {
-  console.error("❌ REDIS_URL not set. Exiting.");
-  process.exit(1);
-}
+let redis: Redis | null = null;
+let redisAvailable = false;
 
-const redis = new Redis(REDIS_URL, {
-  maxRetriesPerRequest: 3,
-  retryStrategy(times) {
-    if (times > 5) return null;
-    return Math.min(times * 500, 5000);
-  },
-  reconnectOnError() {
-    return true;
-  }
-});
+if (REDIS_URL) {
+  redis = new Redis(REDIS_URL, {
+    maxRetriesPerRequest: 3,
+    retryStrategy(times) {
+      if (times > 3) return null;
+      return Math.min(times * 200, 2000);
+    },
+    reconnectOnError() {
+      return true;
+    },
+    lazyConnect: true,
+  });
+}
 
 interface IndexData {
   symbol: string;
@@ -53,85 +54,102 @@ function sleep(ms: number): Promise<void> {
 }
 
 async function cacheTicker(data: TickerData): Promise<void> {
+  if (!redis || !redisAvailable) return;
   try {
     const key = `ticker:${data.symbol}`;
     await redis.setex(key, 10, JSON.stringify(data));
     await redis.publish("ticker:updates", JSON.stringify(data));
   } catch (e) {
-    console.error("Cache ticker error:", e);
+    console.warn("Cache ticker error:", e);
   }
 }
 
 async function cacheIndex(data: IndexData): Promise<void> {
+  if (!redis || !redisAvailable) return;
   try {
     const key = `index:${data.symbol.replace(/ /g, "%20")}`;
     await redis.setex(key, 10, JSON.stringify(data));
     await redis.publish("index:updates", JSON.stringify(data));
   } catch (e) {
-    console.error("Cache index error:", e);
+    console.warn("Cache index error:", e);
   }
 }
 
 async function fetchNSEIndices(): Promise<void> {
-  try {
-    const response = await fetch(`${NSE_API}/index/list`, {
-      headers: { "User-Agent": "Mozilla/5.0" },
-      signal: AbortSignal.timeout(8000)
-    });
+  const fallbackURL = "https://nse-api-ruby.vercel.app";
+  const apis = [NSE_API, fallbackURL];
+  
+  for (const api of apis) {
+    try {
+      const response = await fetch(`${api}/index/list`, {
+        headers: { "User-Agent": "Mozilla/5.0" },
+        signal: AbortSignal.timeout(8000)
+      });
 
-    if (!response.ok) throw new Error("NSE index API failed");
+      if (!response.ok) continue;
 
-    const data = await response.json();
-    const indices = data.data || [];
+      const data = await response.json();
+      const indices = data.data || [];
 
-    for (const idx of indices) {
-      if (!idx.symbol) continue;
-      
-      const indexData: IndexData = {
-        symbol: idx.symbol.replace("NIFTY", "NIFTY%20").replace(" ", "%20"),
-        name: idx.name || idx.symbol,
-        value: parseFloat(idx.lastPrice || idx.value || 0),
-        change: parseFloat(idx.change || 0),
-        percentChange: parseFloat(idx.pChange || 0),
-        timestamp: Date.now(),
-      };
-      await cacheIndex(indexData);
+      for (const idx of indices) {
+        if (!idx.symbol) continue;
+        
+        const indexData: IndexData = {
+          symbol: idx.symbol.replace("NIFTY", "NIFTY%20").replace(" ", "%20"),
+          name: idx.name || idx.symbol,
+          value: parseFloat(idx.lastPrice || idx.value || 0),
+          change: parseFloat(idx.change || 0),
+          percentChange: parseFloat(idx.pChange || 0),
+          timestamp: Date.now(),
+        };
+        await cacheIndex(indexData);
+      }
+      console.log(`✅ Fetched ${indices.length} indices from ${api}`);
+      return;
+    } catch (error) {
+      console.warn(`⚠️ Failed to fetch from ${api}:`, error);
     }
-    console.log(`✅ Fetched ${indices.length} indices`);
-  } catch (error) {
-    console.error("❌ Failed to fetch indices:", error);
   }
+  
+  console.error("❌ All NSE APIs failed");
 }
 
 async function fetchStockQuote(symbol: string): Promise<TickerData | null> {
-  try {
-    const response = await fetch(
-      `${NSE_API}/quote?symbol=${symbol}`,
-      { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(5000) }
-    );
+  const fallbackURL = "https://nse-api-ruby.vercel.app";
+  const apis = [NSE_API, fallbackURL];
+  
+  for (const api of apis) {
+    try {
+      const response = await fetch(
+        `${api}/quote?symbol=${symbol}`,
+        { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(5000) }
+      );
 
-    if (!response.ok) return null;
+      if (!response.ok) continue;
 
-    const data = await response.json();
-    const q = data.data || data;
+      const data = await response.json();
+      const q = data.data || data;
 
-    if (!q || !q.symbol) return null;
+      if (!q || !q.symbol) continue;
 
-    return {
-      symbol: q.symbol,
-      ltp: parseFloat(q.lastPrice || 0),
-      open: parseFloat(q.open || q.previousClose || 0),
-      high: parseFloat(q.dayHigh || q.high || 0),
-      low: parseFloat(q.dayLow || q.low || 0),
-      close: parseFloat(q.previousClose || q.close || 0),
-      volume: parseInt(q.totalTradedVolume || q.volume || 0),
-      change: parseFloat(q.change || 0),
-      percentChange: parseFloat(q.pChange || 0),
-      timestamp: Date.now(),
-    };
-  } catch {
-    return null;
+      return {
+        symbol: q.symbol,
+        ltp: parseFloat(q.lastPrice || 0),
+        open: parseFloat(q.open || q.previousClose || 0),
+        high: parseFloat(q.dayHigh || q.high || 0),
+        low: parseFloat(q.dayLow || q.low || 0),
+        close: parseFloat(q.previousClose || q.close || 0),
+        volume: parseInt(q.totalTradedVolume || q.volume || 0),
+        change: parseFloat(q.change || 0),
+        percentChange: parseFloat(q.pChange || 0),
+        timestamp: Date.now(),
+      };
+    } catch {
+      continue;
+    }
   }
+  
+  return null;
 }
 
 async function fetchAllStocks(): Promise<void> {
@@ -166,20 +184,28 @@ async function main(): Promise<void> {
   console.log("🚀 Zenit Worker starting...");
   console.log(`📡 Using NSE API: ${NSE_API}`);
 
-  redis.on("error", (err) => {
-    console.error("❌ Redis error:", err.message);
-  });
+  if (redis) {
+    redis.on("error", (err) => {
+      console.warn("⚠️ Redis error:", err.message);
+      redisAvailable = false;
+    });
 
-  redis.on("connect", () => {
-    console.log("✅ Redis connected");
-  });
+    redis.on("connect", () => {
+      console.log("✅ Redis connected");
+      redisAvailable = true;
+    });
 
-  try {
-    await redis.ping();
-    console.log("✅ Redis ping OK");
-  } catch (error) {
-    console.error("❌ Redis connection failed:", error);
-    process.exit(1);
+    try {
+      await redis.connect();
+      await redis.ping();
+      redisAvailable = true;
+      console.log("✅ Redis ping OK");
+    } catch (error) {
+      console.warn("⚠️ Redis not available, running without cache");
+      redisAvailable = false;
+    }
+  } else {
+    console.warn("⚠️ REDIS_URL not set, running without cache");
   }
 
   while (true) {
