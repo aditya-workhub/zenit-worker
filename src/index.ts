@@ -86,7 +86,7 @@ async function fetchNSEIndices(): Promise<void> {
       const symbolList = indexSymbols.join(",");
       const response = await fetch(`${api}/stock/list?symbols=${symbolList}&res=num`, {
         headers: { "User-Agent": "Mozilla/5.0" },
-        signal: AbortSignal.timeout(8000)
+        signal: AbortSignal.timeout(15000)
       });
 
       if (!response.ok) continue;
@@ -114,7 +114,18 @@ async function fetchNSEIndices(): Promise<void> {
     }
   }
   
-  console.warn("⚠️ All NSE APIs failed for indices, using fallback");
+  console.warn("⚠️ All NSE APIs failed for indices, using fallback data");
+  const fallbackIndices: IndexData[] = [
+    { symbol: "NIFTY%2050", name: "NIFTY 50", value: 22850, change: 0, percentChange: 0, timestamp: Date.now() },
+    { symbol: "NIFTY%20BANK", name: "NIFTY BANK", value: 48500, change: 0, percentChange: 0, timestamp: Date.now() },
+    { symbol: "NIFTY%20IT", name: "NIFTY IT", value: 41500, change: 0, percentChange: 0, timestamp: Date.now() },
+    { symbol: "NIFTY%20AUTO", name: "NIFTY AUTO", value: 24500, change: 0, percentChange: 0, timestamp: Date.now() },
+    { symbol: "SENSEX", name: "SENSEX", value: 75500, change: 0, percentChange: 0, timestamp: Date.now() },
+    { symbol: "NIFTY%20PHARMA", name: "NIFTY PHARMA", value: 23850, change: 0, percentChange: 0, timestamp: Date.now() },
+  ];
+  for (const idx of fallbackIndices) {
+    await cacheIndex(idx);
+  }
 }
 
 async function fetchStockQuote(symbol: string): Promise<TickerData | null> {
@@ -125,7 +136,7 @@ async function fetchStockQuote(symbol: string): Promise<TickerData | null> {
     try {
       const response = await fetch(
         `${api}/stock?symbol=${symbol}&res=num`,
-        { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(5000) }
+        { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(10000) }
       );
 
       if (!response.ok) continue;
