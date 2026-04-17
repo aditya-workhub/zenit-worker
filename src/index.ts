@@ -15,16 +15,17 @@ let redisAvailable = false;
 
 if (REDIS_URL) {
   redis = new Redis(REDIS_URL, {
-    maxRetriesPerRequest: 5,
+    maxRetriesPerRequest: 1,
     retryStrategy(times) {
-      if (times > 5) return null;
-      return Math.min(times * 200, 2000);
+      if (times > 2) return null;
+      return Math.min(times * 500, 3000);
     },
     reconnectOnError() {
-      return true;
+      return false;
     },
-    enableReadyCheck: false,
-    connectTimeout: 10000,
+    enableReadyCheck: true,
+    connectTimeout: 5000,
+    commandTimeout: 3000,
   });
 }
 
