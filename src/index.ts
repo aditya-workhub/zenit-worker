@@ -1,6 +1,3 @@
-import Redis from "ioredis";
-
-const REDIS_URL = process.env.REDIS_URL || "";
 const NSE_API = process.env.NSE_API || "https://nse-api-ruby.vercel.app";
 
 const INDICES = ["NIFTY 50", "NIFTY BANK", "NIFTY IT", "NIFTY AUTO", "SENSEX", "NIFTY PHARMA"];
@@ -9,25 +6,6 @@ const WATCHED_SYMBOLS = [
   "BHARTIARTL", "KOTAKBANK", "ADANIENT", "TATAMOTORS", "HINDUNILVR", 
   "ITC", "LT", "SUNPHARMA", "MARUTI"
 ];
-
-let redis: Redis | null = null;
-let redisAvailable = false;
-
-if (REDIS_URL) {
-  redis = new Redis(REDIS_URL, {
-    maxRetriesPerRequest: 1,
-    retryStrategy(times) {
-      if (times > 2) return null;
-      return Math.min(times * 500, 3000);
-    },
-    reconnectOnError() {
-      return false;
-    },
-    enableReadyCheck: true,
-    connectTimeout: 5000,
-    commandTimeout: 3000,
-  });
-}
 
 interface IndexData {
   symbol: string;
@@ -55,30 +33,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function cacheTicker(data: TickerData): Promise<void> {
-  if (!redis || !redisAvailable) return;
-  try {
-    const key = `ticker:${data.symbol}`;
-    await redis.setex(key, 10, JSON.stringify(data));
-    await redis.publish("ticker:updates", JSON.stringify(data));
-  } catch (e) {
-    console.warn("Cache ticker error:", e?.message || e);
-    redisAvailable = false;
-  }
-}
-
-async function cacheIndex(data: IndexData): Promise<void> {
-  if (!redis || !redisAvailable) return;
-  try {
-    const key = `index:${data.symbol.replace(/ /g, "%20")}`;
-    await redis.setex(key, 10, JSON.stringify(data));
-    await redis.publish("index:updates", JSON.stringify(data));
-  } catch (e) {
-    console.warn("Cache index error:", e?.message || e);
-    redisAvailable = false;
-  }
-}
-
 async function fetchNSEIndices(): Promise<void> {
   const fallbackURL = "https://nse-api-ruby.vercel.app";
   const apis = [NSE_API, fallbackURL];
@@ -101,15 +55,7 @@ async function fetchNSEIndices(): Promise<void> {
       for (const idx of stocks) {
         if (!idx.symbol) continue;
         
-        const indexData: IndexData = {
-          symbol: idx.symbol.replace(" ", "%20"),
-          name: idx.symbol,
-          value: parseFloat(idx.last_price || 0),
-          change: parseFloat(idx.change || 0),
-          percentChange: parseFloat(idx.percent_change || 0),
-          timestamp: Date.now(),
-        };
-        await cacheIndex(indexData);
+        console.log(`📈 ${idx.symbol}: ${idx.last_price} (${idx.percent_change}%)`);
       }
       console.log(`✅ Fetched ${stocks.length} indices from ${api}`);
       return;
@@ -118,18 +64,7 @@ async function fetchNSEIndices(): Promise<void> {
     }
   }
   
-  console.warn("⚠️ All NSE APIs failed for indices, using fallback data");
-  const fallbackIndices: IndexData[] = [
-    { symbol: "NIFTY%2050", name: "NIFTY 50", value: 22850, change: 0, percentChange: 0, timestamp: Date.now() },
-    { symbol: "NIFTY%20BANK", name: "NIFTY BANK", value: 48500, change: 0, percentChange: 0, timestamp: Date.now() },
-    { symbol: "NIFTY%20IT", name: "NIFTY IT", value: 41500, change: 0, percentChange: 0, timestamp: Date.now() },
-    { symbol: "NIFTY%20AUTO", name: "NIFTY AUTO", value: 24500, change: 0, percentChange: 0, timestamp: Date.now() },
-    { symbol: "SENSEX", name: "SENSEX", value: 75500, change: 0, percentChange: 0, timestamp: Date.now() },
-    { symbol: "NIFTY%20PHARMA", name: "NIFTY PHARMA", value: 23850, change: 0, percentChange: 0, timestamp: Date.now() },
-  ];
-  for (const idx of fallbackIndices) {
-    await cacheIndex(idx);
-  }
+  console.warn("⚠️ All NSE APIs failed for indices");
 }
 
 async function fetchStockQuote(symbol: string): Promise<TickerData | null> {
@@ -179,7 +114,9 @@ async function fetchAllStocks(): Promise<void> {
     const results = await Promise.all(promises);
 
     for (const data of results) {
-      if (data) await cacheTicker(data);
+      if (data) {
+        console.log(`📊 ${data.symbol}: ₹${data.ltp} (${data.percentChange > 0 ? '+' : ''}${data.percentChange}%)`);
+      }
     }
     
     console.log(`📊 Fetched batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(WATCHED_SYMBOLS.length/batchSize)}`);
@@ -201,37 +138,6 @@ function isMarketOpen(): boolean {
 async function main(): Promise<void> {
   console.log("🚀 Zenit Worker starting...");
   console.log(`📡 Using NSE API: ${NSE_API}`);
-
-  if (redis) {
-    redis.on("error", (err) => {
-      console.warn("⚠️ Redis error:", err.message);
-    });
-
-    redis.on("connect", () => {
-      console.log("✅ Redis connected");
-      redisAvailable = true;
-    });
-
-    redis.on("ready", () => {
-      redisAvailable = true;
-    });
-
-    redis.on("close", () => {
-      console.warn("⚠️ Redis connection closed");
-      redisAvailable = false;
-    });
-
-    try {
-      await redis.ping();
-      redisAvailable = true;
-      console.log("✅ Redis ping OK");
-    } catch (error) {
-      console.warn("⚠️ Redis not available, will retry in background");
-      redisAvailable = false;
-    }
-  } else {
-    console.warn("⚠️ REDIS_URL not set, running without cache");
-  }
 
   while (true) {
     const marketOpen = isMarketOpen();
