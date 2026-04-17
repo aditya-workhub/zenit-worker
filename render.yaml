@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: zenit-worker
+    env: node
+    region: Mumbai
+    buildCommand: cd worker && npm install && npm run build
+    startCommand: node worker/dist/index.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: REDIS_URL
+        sync: false
+    autoDeploy: true
